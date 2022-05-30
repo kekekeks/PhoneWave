@@ -1,0 +1,51 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{6D3FDED3-B347-41DF-8F6C-75CAC1A15E4B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhoneWave", "src\PhoneWave\PhoneWave.csproj", "{4159B499-1396-47F6-B0B5-BE4AC9C5A4CB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhoneWave.Generator", "src\PhoneWave.Generator\PhoneWave.Generator.csproj", "{C3C6FEC4-6FEB-49FA-86EB-5A0289FACB4E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{6049987E-B35A-4C3D-A978-A2AF8591FD58}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConsoleTest", "samples\ConsoleTest\ConsoleTest.csproj", "{3481660F-BE96-4644-B150-F1C1E13ED395}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{F178D8AB-46B1-4BB3-9462-95AF7A2B0844}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhoneWave.Generator.Tests", "tests\PhoneWave.Generator.Tests\PhoneWave.Generator.Tests.csproj", "{61A85F13-6570-4BF3-9536-0167AAE5EF98}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "build", "build", "{2D1DB29C-3232-4C61-A97F-EEF863CC2CE6}"
+	ProjectSection(SolutionItems) = preProject
+		ImportPhoneWave.props = ImportPhoneWave.props
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{4159B499-1396-47F6-B0B5-BE4AC9C5A4CB} = {6D3FDED3-B347-41DF-8F6C-75CAC1A15E4B}
+		{C3C6FEC4-6FEB-49FA-86EB-5A0289FACB4E} = {6D3FDED3-B347-41DF-8F6C-75CAC1A15E4B}
+		{3481660F-BE96-4644-B150-F1C1E13ED395} = {6049987E-B35A-4C3D-A978-A2AF8591FD58}
+		{61A85F13-6570-4BF3-9536-0167AAE5EF98} = {F178D8AB-46B1-4BB3-9462-95AF7A2B0844}
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4159B499-1396-47F6-B0B5-BE4AC9C5A4CB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4159B499-1396-47F6-B0B5-BE4AC9C5A4CB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4159B499-1396-47F6-B0B5-BE4AC9C5A4CB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4159B499-1396-47F6-B0B5-BE4AC9C5A4CB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C3C6FEC4-6FEB-49FA-86EB-5A0289FACB4E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3C6FEC4-6FEB-49FA-86EB-5A0289FACB4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3C6FEC4-6FEB-49FA-86EB-5A0289FACB4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3C6FEC4-6FEB-49FA-86EB-5A0289FACB4E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3481660F-BE96-4644-B150-F1C1E13ED395}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3481660F-BE96-4644-B150-F1C1E13ED395}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3481660F-BE96-4644-B150-F1C1E13ED395}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3481660F-BE96-4644-B150-F1C1E13ED395}.Release|Any CPU.Build.0 = Release|Any CPU
+		{61A85F13-6570-4BF3-9536-0167AAE5EF98}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{61A85F13-6570-4BF3-9536-0167AAE5EF98}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{61A85F13-6570-4BF3-9536-0167AAE5EF98}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{61A85F13-6570-4BF3-9536-0167AAE5EF98}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

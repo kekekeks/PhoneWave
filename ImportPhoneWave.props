@@ -1,0 +1,10 @@
+<Project>
+    <ItemGroup>
+        <ProjectReference
+                Include="$(MSBuildThisFileDirectory)/src/PhoneWave.Generator/PhoneWave.Generator.csproj"
+                OutputItemType="Analyzer"
+                ReferenceOutputAssembly="false"
+                PrivateAssets="all" />
+        <ProjectReference Include="$(MSBuildThisFileDirectory)/src/PhoneWave/PhoneWave.csproj"/>
+    </ItemGroup>
+</Project>
