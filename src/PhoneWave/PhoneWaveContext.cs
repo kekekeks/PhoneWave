@@ -34,6 +34,11 @@ namespace PhoneWave
 #endif
             out T changes) where T : TransactionChange
         { 
+            if (IsSuspended)
+            {
+                changes = null;
+                return false;
+            }
             if (ActiveTransaction == null) 
                 throw new InvalidOperationException("Attemted TryGetChanges with no active transaction");
             if(ActiveTransaction.TryGetChange(key, out var c))
@@ -45,7 +50,8 @@ namespace PhoneWave
             return false;
         }
         public void AddChange(object key, TransactionChange change)
-        { 
+        {
+            if (IsSuspended) return;
             if (ActiveTransaction == null) 
                 throw new InvalidOperationException("Attemted AddChange with no active transaction");
             ActiveTransaction.AddChange(key, change);
@@ -76,7 +82,7 @@ namespace PhoneWave
 
         internal void AddRecord(PhoneWaveRecordedTransaction record)
         {
-            // Overwrite entries
+            // Overwrite entries 
             while (CurrentIndex < _recorded.Count - 1)
                 _recorded.RemoveAt(_recorded.Count - 1);
             _recorded.Add(record);
