@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -9,8 +10,47 @@ namespace PhoneWave
 {
     public class PhoneWaveContext : INotifyPropertyChanged
     {
+        public static PhoneWaveContext DummyFrozenContext { get; } = new PhoneWaveContext() { IsSuspended = true };
+
         private ObservableCollection<PhoneWaveRecordedTransaction> _recorded = new();
         private int _currentIndex = -1;
+        public bool IsSuspended { get; private set; } = true;
+         
+        public void Suspend()
+        {
+            IsSuspended = true;
+            CurrentIndex = -1;
+            _recorded.Clear();
+            ActiveTransaction = null;
+        }
+        public void Resume()
+        {
+            IsSuspended = false;
+        }
+
+        public bool TryGetChanges<T>(object key,
+#if NET6_0_OR_GREATER
+            [MaybeNullWhen(false)]
+#endif
+            out T changes) where T : TransactionChange
+        { 
+            if (ActiveTransaction == null) 
+                throw new InvalidOperationException("Attemted TryGetChanges with no active transaction");
+            if(ActiveTransaction.TryGetChange(key, out var c))
+            {
+                changes = (T)c;
+                return true;
+            }
+            changes = null;
+            return false;
+        }
+        public void AddChange(object key, TransactionChange change)
+        { 
+            if (ActiveTransaction == null) 
+                throw new InvalidOperationException("Attemted AddChange with no active transaction");
+            ActiveTransaction.AddChange(key, change);
+        }
+
         public IReadOnlyList<PhoneWaveRecordedTransaction> RecordedTransactions => _recorded;
 
         public int CurrentIndex
@@ -26,6 +66,8 @@ namespace PhoneWave
         internal PhoneWaveTransaction? ActiveTransaction { get; set; }
         public PhoneWaveTransaction BeginTransaction(object? tag = null)
         {
+            if (IsSuspended)
+                throw new InvalidOperationException("Attempted to begin transaction in suspended state");
             if (ActiveTransaction != null)
                 throw new InvalidOperationException();
             ActiveTransaction = new PhoneWaveTransaction(this, tag);

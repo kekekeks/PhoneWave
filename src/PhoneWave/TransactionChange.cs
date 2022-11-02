@@ -1,11 +1,10 @@
 namespace PhoneWave;
 
-abstract class TransactionChange
+public abstract class TransactionChange
 {
     public abstract void Rollback();
     public abstract void RollForward();
-}
-
+} 
 class TransactionChange<T> : TransactionChange
 {
     private readonly PhoneWavePropertyStorage<T> _storage;
@@ -22,6 +21,7 @@ class TransactionChange<T> : TransactionChange
     public void SetValue(T value)
     {
         UpdatedValue = value;
+        _storage.Value = value;
     }
 
     public override void Rollback() => _storage.Value = InitialValue;
