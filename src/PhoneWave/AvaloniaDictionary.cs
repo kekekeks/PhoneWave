@@ -170,7 +170,7 @@ internal class AvaloniaDictionary<TKey, TValue> : IDictionary<TKey, TValue>,
     /// <inheritdoc/>
     public bool TryGetValue(TKey key,
 #if NET6_0_OR_GREATER
-        [MaybeNullWhen(false)]
+        [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)]
 #endif
         out TValue value) => _inner.TryGetValue(key, out value);
     /// <inheritdoc/>

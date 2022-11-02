@@ -212,7 +212,7 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
 
     public bool TryGetValue(TKey key,
 #if NET6_0_OR_GREATER
-        [MaybeNullWhen(false)] 
+        [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] 
 #endif
         out TValue value) => _dictionary.TryGetValue(key, out value);
 
