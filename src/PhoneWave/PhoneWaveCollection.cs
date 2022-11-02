@@ -39,17 +39,17 @@ public class PhoneWaveCollection<T> : ObservableCollection<T>
     }
     static void UpdateCollection(PhoneWaveContext context, PhoneWaveCollection<T> target, bool isRemoval, int index, T item)
     {
-        void MakeChange(PhoneWaveCollectionChangeAggregator<T> x)
+        void MakeChange(PhoneWaveCollectionChangeAggregator x)
         {
             if (isRemoval) x.RemoveItem(item, index);
             else x.AddItem(item, index);
         }
 
-        if (context.TryGetChanges<PhoneWaveCollectionChangeAggregator<T>>(target, out var x))
+        if (context.TryGetChanges<PhoneWaveCollectionChangeAggregator>(target, out var x))
             MakeChange(x);
         else
         {
-            var da = new PhoneWaveCollectionChangeAggregator<T>(target);
+            var da = new PhoneWaveCollectionChangeAggregator(target);
             MakeChange(da);
             context.AddChange(target, da);
         }
