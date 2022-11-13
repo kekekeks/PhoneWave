@@ -8,8 +8,8 @@ namespace ConsoleTest
         static void Main(string[] args)
         {
             var ctx = new PhoneWaveContext();
+            ctx.Resume();
             var data = new TestClass(ctx);
-
             data.PropertyChanged += (_, e) => Console.WriteLine("PropertyChanged: " + data.Foo);
             using (var t = ctx.BeginTransaction("Sup"))
             {

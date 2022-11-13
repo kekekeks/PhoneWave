@@ -1,6 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.Serialization;
+
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
 
 namespace PhoneWave;
 
@@ -16,12 +23,28 @@ public class PhoneWaveTransaction : IDisposable
         _tag = tag;
     }
 
-    Dictionary<PhoneWavePropertyStorageBase, TransactionChange> _changes = new ();
+    Dictionary<object, TransactionChange> _changes = new();
 
     internal void Set<T>(PhoneWavePropertyStorage<T> storage, T updated)
     {
         if (!_changes.TryGetValue(storage, out var change))
             _changes[storage] = new TransactionChange<T>(storage, updated);
+        else
+            ((TransactionChange<T>)change).SetValue(updated);
+    }
+
+    public bool TryGetChange(object key,
+#if NET6_0_OR_GREATER
+        [MaybeNullWhen(false)] 
+#endif
+    out TransactionChange change) 
+        => _changes.TryGetValue(key, out change);
+
+    public void AddChange(object key, TransactionChange firstChange) 
+    {
+        if (TryGetChange(key, out _))
+            throw new InvalidOperationException("Attempted to add with a change already present");
+        _changes[key] = firstChange; 
     }
 
     public void Commit()
@@ -48,10 +71,13 @@ public class PhoneWaveTransaction : IDisposable
     public void Dispose() => Rollback();
 }
 
+/// <summary>
+/// Stores a completed, now-immutable transaction
+/// </summary>
 public class PhoneWaveRecordedTransaction
 {
     private readonly List<TransactionChange> _changes;
-    public object Tag { get; }
+    public object? Tag { get; }
 
     internal PhoneWaveRecordedTransaction(List<TransactionChange> changes, object? tag)
     {

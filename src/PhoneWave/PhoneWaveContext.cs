@@ -2,70 +2,120 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace PhoneWave
+namespace PhoneWave;
+
+public class PhoneWaveContext : INotifyPropertyChanged
 {
-    public class PhoneWaveContext : INotifyPropertyChanged
+    public static PhoneWaveContext DummyFrozenContext { get; } = new PhoneWaveContext() { IsSuspended = true };
+
+    private ObservableCollection<PhoneWaveRecordedTransaction> _recorded = new();
+    private int _currentIndex = -1;
+    public bool IsSuspended { get; private set; } = true;
+     
+    public void Suspend()
     {
-        private ObservableCollection<PhoneWaveRecordedTransaction> _recorded = new();
-        private int _currentIndex = -1;
-        public IReadOnlyList<PhoneWaveRecordedTransaction> RecordedTransactions => _recorded;
+        IsSuspended = true;
+        CurrentIndex = -1;
+        _recorded.Clear();
+        ActiveTransaction = null;
+    }
+    public void Resume()
+    {
+        IsSuspended = false;
+    }
 
-        public int CurrentIndex
+    public bool TryGetChanges<T>(object key,
+#if NET6_0_OR_GREATER
+        [MaybeNullWhen(false)]
+#endif
+        out T changes) where T : TransactionChange
+    { 
+        if (IsSuspended)
         {
-            get => _currentIndex;
-            private set
-            {
-                _currentIndex = value;
-                OnPropertyChanged(nameof(CurrentIndex));
-            }
+            changes = null;
+            return false;
         }
-
-        internal PhoneWaveTransaction? ActiveTransaction { get; set; }
-        public PhoneWaveTransaction BeginTransaction(object? tag = null)
+        if (ActiveTransaction == null) 
+            throw new InvalidOperationException("Attemted TryGetChanges with no active transaction");
+        if(ActiveTransaction.TryGetChange(key, out var c))
         {
-            if (ActiveTransaction != null)
-                throw new InvalidOperationException();
-            ActiveTransaction = new PhoneWaveTransaction(this, tag);
-            return ActiveTransaction;
+            changes = (T)c;
+            return true;
         }
+        changes = null;
+        return false;
+    }
+    public void AddChange(object key, TransactionChange change)
+    {
+        if (IsSuspended) return;
+        if (ActiveTransaction == null) 
+            throw new InvalidOperationException("Attemted AddChange with no active transaction");
+        ActiveTransaction.AddChange(key, change);
+    }
 
-        internal void AddRecord(PhoneWaveRecordedTransaction record)
+    public IReadOnlyList<PhoneWaveRecordedTransaction> RecordedTransactions => _recorded;
+
+    public int CurrentIndex
+    {
+        get => _currentIndex;
+        private set
         {
-            // Overwrite entries
-            while (CurrentIndex < _recorded.Count - 1)
-                _recorded.RemoveAt(_recorded.Count - 1);
-            _recorded.Add(record);
-            
-            CurrentIndex = _recorded.Count - 1;
+            if (_currentIndex == value) return;
+            _currentIndex = value;
+            OnPropertyChanged(nameof(CurrentIndex));
+            OnPropertyChanged(nameof(CurrentItem));
         }
+    }
+    public PhoneWaveRecordedTransaction? CurrentItem => (CurrentIndex >= 0 && CurrentIndex < _recorded.Count) ? _recorded[CurrentIndex] : null;
 
-        public bool CanRollback => CurrentIndex >= 0;
-        public bool CanRollForward => CurrentIndex < _recorded.Count - 1;
+    internal PhoneWaveTransaction? ActiveTransaction { get; set; }
+    public PhoneWaveTransaction BeginTransaction(object? tag = null)
+    {
+        if (IsSuspended)
+            throw new InvalidOperationException("Attempted to begin transaction in suspended state");
+        if (ActiveTransaction != null)
+            throw new InvalidOperationException();
+        ActiveTransaction = new PhoneWaveTransaction(this, tag);
+        return ActiveTransaction;
+    }
+
+    internal void AddRecord(PhoneWaveRecordedTransaction record)
+    {
+        // Overwrite entries 
+        while (CurrentIndex < _recorded.Count - 1)
+            _recorded.RemoveAt(_recorded.Count - 1);
+        _recorded.Add(record);
         
-        public void Rollback()
-        {
-            if (!CanRollback)
-                throw new InvalidOperationException();
-            _recorded[CurrentIndex].RollBack();
-            CurrentIndex--;
-        }
+        CurrentIndex = _recorded.Count - 1;
+    }
 
-        public void RollForward()
-        {
-            if (!CanRollForward)
-                throw new InvalidOperationException();
-            CurrentIndex++;
-            _recorded[CurrentIndex].RollForward();
-        }
+    public bool CanRollback => CurrentIndex >= 0;
+    public bool CanRollForward => CurrentIndex < _recorded.Count - 1;
+    
+    public void Rollback()
+    {
+        if (!CanRollback)
+            throw new InvalidOperationException();
+        _recorded[CurrentIndex].RollBack();
+        CurrentIndex--;
+    }
 
-        public event PropertyChangedEventHandler? PropertyChanged;
+    public void RollForward()
+    {
+        if (!CanRollForward)
+            throw new InvalidOperationException();
+        CurrentIndex++;
+        _recorded[CurrentIndex].RollForward();
+    }
 
-        protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }

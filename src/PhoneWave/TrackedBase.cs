@@ -1,26 +1,35 @@
 using System;
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace PhoneWave;
 
 public abstract class PhoneWaveBase : INotifyPropertyChanged
-{
-    private readonly PhoneWaveContext _context;
+{  
+    public PhoneWaveContext Context { get; } 
 
     public PhoneWaveBase(PhoneWaveContext context)
     {
-        _context = context;
+        Context = context;
         InitializeStorage();
     }
 
     protected void SetValue<T>(PhoneWavePropertyStorage<T> storage, T value)
-    {
-        if (_context.ActiveTransaction == null)
+    { 
+        if (Context.ActiveTransaction == null)
+        { 
+            if (Context.IsSuspended)
+            {
+                storage.Value = value;
+                return;
+            }
             throw new InvalidOperationException("Unable to modify the state without an active transaction");
-        _context.ActiveTransaction.Set(storage, value);
+        }
+        
+        Context.ActiveTransaction.Set(storage, value);
     }
-
+     
     protected virtual void InitializeStorage()
     {
         
