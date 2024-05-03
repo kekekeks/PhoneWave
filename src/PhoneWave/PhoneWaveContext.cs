@@ -40,7 +40,7 @@ public class PhoneWaveContext : INotifyPropertyChanged
             return false;
         }
         if (ActiveTransaction == null) 
-            throw new InvalidOperationException("Attemted TryGetChanges with no active transaction");
+            throw new InvalidOperationException("Attempted TryGetChanges with no active transaction");
         if(ActiveTransaction.TryGetChange(key, out var c))
         {
             changes = (T)c;
@@ -53,7 +53,7 @@ public class PhoneWaveContext : INotifyPropertyChanged
     {
         if (IsSuspended) return;
         if (ActiveTransaction == null) 
-            throw new InvalidOperationException("Attemted AddChange with no active transaction");
+            throw new InvalidOperationException("Attempted AddChange with no active transaction");
         ActiveTransaction.AddChange(key, change);
     }
 
