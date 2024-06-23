@@ -26,7 +26,17 @@ namespace PhoneWave.Generator
                 = context.CompilationProvider.Combine(enumDeclarations.Collect());
             
             context.RegisterSourceOutput(compilationAndEnums,
-                static (spc, source) => Execute(source.Item1, source.Item2, spc));
+                static (spc, source) =>
+                {
+                    try
+                    {
+                        Execute(source.Item1, source.Item2, spc);
+                    }
+                    catch (Exception e)
+                    {
+                        spc.ReportDiagnostic(Diagnostic.Create("WTF001", "PhoneWaveGen", $"Failure: {e.ToString()}", DiagnosticSeverity.Error, DiagnosticSeverity.Error, true, 0));
+                    }
+                });
         }
 
         private static void Execute(Compilation compilation, ImmutableArray<ClassDeclarationSyntax> declarations, SourceProductionContext ctx)
