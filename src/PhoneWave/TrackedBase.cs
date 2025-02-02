@@ -37,7 +37,7 @@ public abstract class PhoneWaveBase : INotifyPropertyChanged
     
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    internal void NotifyPropertyChanged(string propertyName)
+    protected internal virtual void NotifyPropertyChanged(string propertyName)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
