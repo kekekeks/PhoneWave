@@ -61,9 +61,19 @@ namespace PhoneWave.Generator
                     {
                         var typeArg = (INamedTypeSymbol)attr.ConstructorArguments[0].Value;
                         var nameArg = (string)attr.ConstructorArguments[1].Value;
+                        var displayNameArg = (string?)attr.ConstructorArguments[2].Value ?? nameArg;
+                        var displayName = displayNameArg == nameArg 
+                            ? "" 
+                            : $"[System.ComponentModel.DisplayName(\"{displayNameArg}\")]{Environment.NewLine}";
+                        var descriptionArg = (string)attr.ConstructorArguments[3].Value;
+                        var description = string.IsNullOrWhiteSpace(descriptionArg) 
+                            ? "" 
+                            : $"[System.ComponentModel.Description(\"{descriptionArg}\")]{Environment.NewLine}";
                         classCode += $@"
 PhoneWave.PhoneWavePropertyStorage<{typeArg}> __storageFor__{nameArg} = new();
-public {typeArg} {nameArg}
+public partial {typeArg} {nameArg} {{ get; set; }}
+
+{displayName}{description}public partial {typeArg} {nameArg}
 {{
     get => __storageFor__{nameArg}.Value;
     set => SetValue(__storageFor__{nameArg}, value);
