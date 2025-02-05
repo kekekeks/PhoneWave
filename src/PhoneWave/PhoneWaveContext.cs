@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace PhoneWave;
 
@@ -95,12 +96,17 @@ public class PhoneWaveContext : INotifyPropertyChanged
 
     public bool CanRollback => CurrentIndex >= 0;
     public bool CanRollForward => CurrentIndex < _recorded.Count - 1;
+
+    private int _rollDepth = 0;
+    public bool IsRolling => _rollDepth > 0;
     
     public void Rollback()
     {
         if (!CanRollback)
             throw new InvalidOperationException();
+        Interlocked.Increment(ref _rollDepth);
         _recorded[CurrentIndex].RollBack();
+        Interlocked.Decrement(ref _rollDepth);
         CurrentIndex--;
     }
 
@@ -109,7 +115,9 @@ public class PhoneWaveContext : INotifyPropertyChanged
         if (!CanRollForward)
             throw new InvalidOperationException();
         CurrentIndex++;
+        Interlocked.Increment(ref _rollDepth);
         _recorded[CurrentIndex].RollForward();
+        Interlocked.Decrement(ref _rollDepth);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
