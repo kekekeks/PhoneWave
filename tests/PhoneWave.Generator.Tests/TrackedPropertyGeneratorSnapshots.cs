@@ -17,10 +17,9 @@ namespace PhoneWave.Generator.Tests
 namespace Test;
 using System;
 using PhoneWave;
-[TrackProperty(typeof(System.Collections.Generic.List<int>.Enumerator), ""Bar"")]
 partial class Foo
 {
-            
+    [Tracked] public partial System.Collections.Generic.List<int>.Enumerator Bar {get;set;}        
 }";
 
             // Pass the source code to our helper and snapshot test the output

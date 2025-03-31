@@ -47,7 +47,7 @@ namespace PhoneWave.Generator.Tests
             {
                 MetadataReference.CreateFromFile(Path.Combine(refPath, "netstandard.dll")),
                 
-                MetadataReference.CreateFromFile(typeof(TrackPropertyAttribute).Assembly.Location)
+                MetadataReference.CreateFromFile(typeof(TrackedAttribute).Assembly.Location)
             };
             
             // Create a Roslyn compilation for the syntax tree.

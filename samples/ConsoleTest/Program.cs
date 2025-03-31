@@ -37,9 +37,12 @@ namespace ConsoleTest
         }
     }
     
-    [TrackProperty(typeof(int), "Foo")]
-    partial class TestClass : PhoneWaveBase
+    public partial class TestClass : PhoneWaveBase
     {
+        [Tracked]
+        public partial int Foo { get; set; }
+
+        
         public TestClass(PhoneWaveContext context) : base(context)
         {
         }

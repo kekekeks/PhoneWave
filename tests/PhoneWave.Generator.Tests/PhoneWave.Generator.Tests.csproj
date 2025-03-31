@@ -24,7 +24,7 @@
 
         <ProjectReference Include="..\..\src\PhoneWave.Generator\PhoneWave.Generator.csproj" />
         <ProjectReference Include="..\..\src\PhoneWave\PhoneWave.csproj" />
-        <EmbeddedResource Include="obj\PhoneWave.Generator.Tests.csproj.nuget.g.props">
+        <EmbeddedResource Include="$(BaseIntermediateOutputPath)\PhoneWave.Generator.Tests.csproj.nuget.g.props">
             <LogicalName>nuget.info</LogicalName>
         </EmbeddedResource>
     </ItemGroup>

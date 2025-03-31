@@ -1,144 +1,106 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Text;
+using PropInfo = (bool Success, string Name, string PropertyType, string ParentType, string ParentTypeNamespace);
 
 namespace PhoneWave.Generator
 {
-    
     [Generator(LanguageNames.CSharp)]
     public class PhoneWaveGenerator : IIncrementalGenerator
     {
+        private static readonly PropInfo FailurePropInfo = (false, "", "", "", "");
+        
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
-            IncrementalValuesProvider<ClassDeclarationSyntax> enumDeclarations = context.SyntaxProvider
-                .CreateSyntaxProvider(
-                    predicate: static (s, _) => s is ClassDeclarationSyntax { AttributeLists.Count: > 0 }, 
-                    transform: static (ctx, _) => GetSemanticTargetForGeneration(ctx))
-                .Where(static m => m is not null)!;
             
-            IncrementalValueProvider<(Compilation, ImmutableArray<ClassDeclarationSyntax>)> compilationAndEnums
-                = context.CompilationProvider.Combine(enumDeclarations.Collect());
-            
-            context.RegisterSourceOutput(compilationAndEnums,
+            IncrementalValuesProvider<PropInfo> enumDeclarations = context.SyntaxProvider
+                .ForAttributeWithMetadataName("PhoneWave.TrackedAttribute",
+                    predicate: static (s, _) => s is PropertyDeclarationSyntax p && p.Modifiers.Any(SyntaxKind.PartialKeyword), 
+                    transform: static (ctx, _) => GetPropertyInfo(ctx))
+                .Where(static m => m.Success);
+
+            var grouped = enumDeclarations.Collect()
+                .SelectMany((all, _) =>
+                {
+                    var groups = all.GroupBy(static m => (m.ParentTypeNamespace, m.ParentType));
+                    return ImmutableArray<ClassInfo>.Empty.AddRange(groups.Select(static g => 
+                        new ClassInfo(g.Key.ParentType, g.Key.ParentTypeNamespace, g.Select(x => (x.PropertyType, x.Name)).ToArray())));
+                });
+             
+            context.RegisterSourceOutput(grouped,
                 static (spc, source) =>
                 {
                     try
                     {
-                        Execute(source.Item1, source.Item2, spc);
+                        ExecuteClass(spc, source);
                     }
                     catch (Exception e)
                     {
-                        spc.ReportDiagnostic(Diagnostic.Create("WTF001", "PhoneWaveGen", $"Failure: {e.ToString()}", DiagnosticSeverity.Error, DiagnosticSeverity.Error, true, 0));
+                        spc.ReportDiagnostic(Diagnostic.Create("WTF001", "PhoneWaveGen", $"Failure: {e}", 
+                            DiagnosticSeverity.Error, DiagnosticSeverity.Error, true, 0));
                     }
-                });
+                }); 
         }
 
-        private static void Execute(Compilation compilation, ImmutableArray<ClassDeclarationSyntax> declarations, SourceProductionContext ctx)
+        private static void ExecuteClass(SourceProductionContext ctx, ClassInfo classInfo)
         {
-            if (declarations.IsDefaultOrEmpty)
-                return;
-            INamedTypeSymbol trackPropertyAttribute = compilation.GetTypeByMetadataName("PhoneWave.TrackPropertyAttribute")!;
+            var className = classInfo.ClassName;
+            var classNamespace = classInfo.ClassNamespace;
+            
+            var propBuilder = new StringBuilder();
+            var initBuilder = new StringBuilder();
 
-            
-            
-            foreach (var sourceClass in declarations.Distinct())
+            foreach (var property in classInfo.Properties)
             {
-                var classCode = "";
-                var initCode = "";
-                
-                var model = compilation.GetSemanticModel(sourceClass.SyntaxTree);
-                var symbol = ModelExtensions.GetDeclaredSymbol(model, sourceClass);
-
-                foreach (var attr in symbol!.GetAttributes())
-                {
-                    if (trackPropertyAttribute.Equals(attr.AttributeClass, SymbolEqualityComparer.Default))
-                    {
-                        var typeArg = (INamedTypeSymbol)attr.ConstructorArguments[0].Value;
-                        var nameArg = (string)attr.ConstructorArguments[1].Value;
-                        var displayNameArg = (string?)attr.ConstructorArguments[2].Value ?? nameArg;
-                        var displayName = displayNameArg == nameArg 
-                            ? "" 
-                            : $"[System.ComponentModel.DisplayName(\"{displayNameArg}\")]{Environment.NewLine}";
-                        var descriptionArg = (string)attr.ConstructorArguments[3].Value;
-                        var description = string.IsNullOrWhiteSpace(descriptionArg) 
-                            ? "" 
-                            : $"[System.ComponentModel.Description(\"{descriptionArg}\")]{Environment.NewLine}";
-                        classCode += $@"
-PhoneWave.PhoneWavePropertyStorage<{typeArg}> __storageFor__{nameArg} = new();
-public partial {typeArg} {nameArg} {{ get; set; }}
-
-{displayName}{description}public partial {typeArg} {nameArg}
-{{
-    get => __storageFor__{nameArg}.Value;
-    set => SetValue(__storageFor__{nameArg}, value);
-}}
-";
-                        initCode += $"__storageFor__{nameArg}.Initialize(this, \"{nameArg}\");\n";
-                    }
-                }
-
-                if (!string.IsNullOrWhiteSpace(classCode))
-                {
-                    var ns = GetNamespace(sourceClass);
-                    classCode = $@"
-namespace {ns}
-{{
-    partial class {sourceClass.Identifier}
-    {{
-        {classCode}
-        protected override void InitializeStorage()
-        {{
-            {initCode}
-            base.InitializeStorage();
-        }}
-    }}
-}}";
-                    ctx.AddSource(ns + "." + sourceClass.Identifier + ".g.cs", classCode);
-                }
+                var typeString = property.PropertyType;
+                var propertyName = property.PropertyName;
+                initBuilder.AppendLine($"__storageFor__{propertyName}.Initialize(this, \"{propertyName}\");");
+                propBuilder.AppendLine($@"
+        PhoneWave.PhoneWavePropertyStorage<{typeString}> __storageFor__{propertyName} = new();
+        public partial {typeString} {propertyName} 
+        {{ 
+            get => __storageFor__{propertyName}.Value; 
+            set => SetValue(__storageFor__{propertyName}, value); 
+        }}");
             }
 
-            /*
-            // Convert each EnumDeclarationSyntax to an EnumToGenerate
-            List<EnumToGenerate> enumsToGenerate = GetTypesToGenerate(compilation, distinctEnums, context.CancellationToken);
-
-            // If there were errors in the EnumDeclarationSyntax, we won't create an
-            // EnumToGenerate for it, so make sure we have something to generate
-            if (enumsToGenerate.Count > 0)
-            {
-                // generate the source code and add it to the output
-                string result = SourceGenerationHelper.GenerateExtensionClass(enumsToGenerate);
-                context.AddSource("EnumExtensions.g.cs", SourceText.From(result, Encoding.UTF8));
-            }*/
+            var fileBody = $$"""
+                             namespace {{classNamespace}} 
+                             { 
+                                 partial class {{className}} 
+                                 {
+                                    {{propBuilder}}
+                                    
+                                     protected override void InitializeStorage() 
+                                     {
+                                         {{initBuilder}}
+                                         base.InitializeStorage();
+                                     }
+                                 }
+                             }
+                             """;
+            ctx.AddSource($"{classNamespace}.{className}.g.cs", fileBody);
         }
 
-        static ClassDeclarationSyntax? GetSemanticTargetForGeneration(GeneratorSyntaxContext context)
+        static PropInfo GetPropertyInfo(GeneratorAttributeSyntaxContext context)
         {
-            var declaration = (ClassDeclarationSyntax)context.Node;
-            
-            foreach (AttributeListSyntax attributeListSyntax in declaration.AttributeLists)
-            {
-                foreach (AttributeSyntax attributeSyntax in attributeListSyntax.Attributes)
-                {
-                    if (ModelExtensions.GetSymbolInfo(context.SemanticModel, attributeSyntax).Symbol is not IMethodSymbol attributeSymbol)
-                        continue;
-
-                    var attributeContainingTypeSymbol = attributeSymbol.ContainingType;
-                    string fullName = attributeContainingTypeSymbol.ToDisplayString();
-                    
-                    if (fullName == "PhoneWave.TrackPropertyAttribute")
-                        return declaration;
-                }
-            }
-
-            return null;
+            if (context.TargetNode is not PropertyDeclarationSyntax declaration) return FailurePropInfo;
+            if (declaration.Parent is not ClassDeclarationSyntax classDeclarationSyntax) return FailurePropInfo;
+            if (context.SemanticModel.GetDeclaredSymbol(declaration) is not { } propertySymbol) return FailurePropInfo;
+            var typeSymbol = propertySymbol.Type;
+            var declaringType = propertySymbol.ContainingType;
+            var typeString = typeSymbol.ToString();
+            var name = declaration.Identifier.Text;
+            var parentClassNamespace = GetNamespace(classDeclarationSyntax);
+                //var parentClassName = classDeclarationSyntax.Identifier.Text;
+            return (true, name, typeString, declaringType.Name, parentClassNamespace);
         }   
-// determine the namespace the class/enum/struct is declared in, if any
+        
+        // determine the namespace the class/enum/struct is declared in, if any
         static string GetNamespace(BaseTypeDeclarationSyntax syntax)
         {
             // If we don't have a namespace at all we'll return an empty string
@@ -149,7 +111,7 @@ namespace {ns}
             // (could be a nested type, for example)
             SyntaxNode? potentialNamespaceParent = syntax.Parent;
     
-            // Keep moving "out" of nested classes etc until we get to a namespace
+            // Keep moving "out" of nested classes etc. until we get to a namespace
             // or until we run out of parents
             while (potentialNamespaceParent != null &&
                    potentialNamespaceParent is not NamespaceDeclarationSyntax
