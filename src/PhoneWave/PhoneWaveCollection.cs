@@ -39,6 +39,16 @@ public class PhoneWaveCollection<T> : ObservableCollection<T>
     }
     static void UpdateCollection(PhoneWaveContext context, PhoneWaveCollection<T> target, bool isRemoval, int index, T item)
     {
+        if (context.IsSuspended) return;
+        // During rollback/roll-forward, skip tracking to avoid corrupting the undo stack
+        if (context.IsRolling) return;
+        
+        // Auto-create transaction if none active (for standalone collection ops)
+        bool autoTx = context.ActiveTransaction == null;
+        PhoneWaveTransaction? tx = null;
+        if (autoTx)
+            tx = context.BeginTransaction(null);
+
         void MakeChange(PhoneWaveCollectionChangeAggregator x)
         {
             if (isRemoval) x.RemoveItem(item, index);
@@ -53,6 +63,9 @@ public class PhoneWaveCollection<T> : ObservableCollection<T>
             MakeChange(da);
             context.AddChange(target, da);
         }
+        
+        if (autoTx)
+            tx?.Commit();
     }
 
     public PhoneWaveContext Context { get; }
