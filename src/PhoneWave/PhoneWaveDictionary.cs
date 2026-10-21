@@ -54,22 +54,28 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
             state.NewValue = newValue;
         }
 
-        public override void Rollback()
+        // Every recorded key state is replayed EXACTLY ONCE, best-effort: a CollectionChanged
+        // handler throwing on one key must not strand the keys after it (the history position still
+        // moves to match the completed replay). The failures surface together at the end. Both
+        // directions walk a snapshot, so the enumeration itself can never be broken.
+        public override void Rollback() =>
+            ReplayFailures.ApplyEachThenThrow(_states.ToArray(), RestoreOld, ReplayFailureMessage);
+
+        public override void RollForward() =>
+            ReplayFailures.ApplyEachThenThrow(_states.ToArray(), ApplyNew, ReplayFailureMessage);
+
+        private const string ReplayFailureMessage = "Tracked dictionary replay applied every change; some collection observers failed.";
+
+        private void RestoreOld(KeyValuePair<TKey, State> s)
         {
-            foreach (var s in _states)
-            {
-                if (s.Value.HasOldValue) _target.SetNoTransaction(s.Key, s.Value.OldValue!);
-                else if (!s.Value.HasNewValue) _target.RemoveNoTransaction(s.Key);
-            }
+            if (s.Value.HasOldValue) _target.SetNoTransaction(s.Key, s.Value.OldValue!);
+            else if (!s.Value.HasNewValue) _target.RemoveNoTransaction(s.Key);
         }
 
-        public override void RollForward()
+        private void ApplyNew(KeyValuePair<TKey, State> s)
         {
-            foreach (var s in _states)
-            {
-                if (s.Value.HasNewValue) _target.SetNoTransaction(s.Key, s.Value.NewValue!);
-                else if (!s.Value.HasOldValue) _target.RemoveNoTransaction(s.Key);
-            }
+            if (s.Value.HasNewValue) _target.SetNoTransaction(s.Key, s.Value.NewValue!);
+            else if (!s.Value.HasOldValue) _target.RemoveNoTransaction(s.Key);
         }
     }
 

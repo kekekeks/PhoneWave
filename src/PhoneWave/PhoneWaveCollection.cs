@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Collections.ObjectModel;
 
@@ -20,29 +21,41 @@ public class PhoneWaveCollection<T> : ObservableCollection<T>
         public void AddItem(T item, int index) => _changes.Add((false, index, item));
         public void RemoveItem(T item, int index) => _changes.Add((true, index, item));
 
-        public override void Rollback()
+        // Every recorded insert/remove is replayed EXACTLY ONCE, best-effort: a CollectionChanged
+        // handler throwing on one item must not strand the items after it (the history position
+        // still moves to match the completed replay). The failures surface together at the end.
+        // Both directions walk a snapshot, so the enumeration itself can never be broken.
+        public override void Rollback() =>
+            ReplayFailures.ApplyEachThenThrow(Enumerable.Reverse(_changes.ToArray()), ApplyInverse, ReplayFailureMessage);
+
+        public override void RollForward() =>
+            ReplayFailures.ApplyEachThenThrow(_changes.ToArray(), Apply, ReplayFailureMessage);
+
+        private const string ReplayFailureMessage = "Tracked collection replay applied every change; some collection observers failed.";
+
+        private void Apply((bool isRemove, int index, T item) change)
         {
-            foreach (var (isRemove, index, item) in Enumerable.Reverse(_changes))
-            {
-                if (isRemove) _target.InsertItemNoTransaction(index, item);
-                else _target.RemoveItemNoTransaction(index);
-            }
+            if (!change.isRemove) _target.InsertItemNoTransaction(change.index, change.item);
+            else _target.RemoveItemNoTransaction(change.index);
         }
-        public override void RollForward()
+
+        private void ApplyInverse((bool isRemove, int index, T item) change)
         {
-            foreach (var (isRemove, index, item) in _changes)
-            {
-                if (!isRemove) _target.InsertItemNoTransaction(index, item);
-                else _target.RemoveItemNoTransaction(index);
-            }
+            if (change.isRemove) _target.InsertItemNoTransaction(change.index, change.item);
+            else _target.RemoveItemNoTransaction(change.index);
         }
     }
     static void UpdateCollection(PhoneWaveContext context, PhoneWaveCollection<T> target, bool isRemoval, int index, T item)
     {
         if (context.IsSuspended) return;
-        // During rollback/roll-forward, skip tracking to avoid corrupting the undo stack
-        if (context.IsRolling) return;
-        
+        // A replay (undo/redo/abort) applies recorded changes through the NoTransaction paths only,
+        // so an edit that reaches here while one runs comes from a notification observer. It used
+        // to be applied silently and never recorded — a permanent change no undo could reach. It
+        // now fails loudly BEFORE the collection changes, exactly as a tracked property write
+        // during a replay does (no active transaction on undo/redo; an aborting one on abort).
+        if (context.IsRolling)
+            throw new InvalidOperationException("Attempted to modify a tracked collection while a replay (undo/redo/abort) is in progress");
+
         // Auto-create transaction if none active (for standalone collection ops)
         bool autoTx = context.ActiveTransaction == null;
         PhoneWaveTransaction? tx = null;
