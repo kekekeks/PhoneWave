@@ -66,61 +66,50 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
 
         private const string ReplayFailureMessage = "Tracked dictionary replay applied every change; some collection observers failed.";
 
+        // Each side of a key state is "present with this value" or "absent" — tracked by the
+        // HasOldValue/HasNewValue flags, never by a sentinel value (default/null is a legal value).
+        // A replay drives the key to the recorded side exactly: present → set, absent → remove.
+        // These used to skip the remove when the other side was present, so undoing an ADDED key
+        // and redoing a REMOVED key left the key in the dictionary. Removing an already-absent key
+        // (a key added and removed in one transaction) is a silent no-op: no notification.
         private void RestoreOld(KeyValuePair<TKey, State> s)
         {
             if (s.Value.HasOldValue) _target.SetNoTransaction(s.Key, s.Value.OldValue!);
-            else if (!s.Value.HasNewValue) _target.RemoveNoTransaction(s.Key);
+            else _target.RemoveNoTransaction(s.Key);
         }
 
         private void ApplyNew(KeyValuePair<TKey, State> s)
         {
             if (s.Value.HasNewValue) _target.SetNoTransaction(s.Key, s.Value.NewValue!);
-            else if (!s.Value.HasOldValue) _target.RemoveNoTransaction(s.Key);
+            else _target.RemoveNoTransaction(s.Key);
         }
     }
 
+    // ONE aggregator per dictionary per transaction, keyed by the dictionary itself (exactly as
+    // PhoneWaveCollection keys by its target); it holds a state per dictionary key. It used to be
+    // keyed by the dictionary KEY, so the same key changed in two dictionaries in one transaction
+    // (e.g. one user field set on several maps) landed in the FIRST dictionary's aggregator: the
+    // second dictionary's change was never undone, and a key equal to another change's key could
+    // even fetch an aggregator of the wrong type.
+    static PhoneWaveDictionaryChangeAggregator? GetAggregator(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target)
+    {
+        if (context.TryGetChanges<PhoneWaveDictionaryChangeAggregator>(target, out var ch))
+            return ch;
+        if (context.IsSuspended)
+            return null;
+        var newChange = new PhoneWaveDictionaryChangeAggregator(target);
+        context.AddChange(target, newChange);
+        return newChange;
+    }
+
     static void AddToDictionary(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target,
-        TKey key, TValue value)
-    {
-        if (context.TryGetChanges<PhoneWaveDictionaryChangeAggregator>(key, out var ch))
-        {
-            ch.AddAdd(key, value);
-        }
-        else
-        {
-            var newChange = new PhoneWaveDictionaryChangeAggregator(target);
-            newChange.AddAdd(key, value);
-            context.AddChange(key, newChange);
-        }
-    }
+        TKey key, TValue value) => GetAggregator(context, target)?.AddAdd(key, value);
+
     static void RemoveFromDictionary(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target,
-        TKey key, TValue value)
-    {
-        if (context.TryGetChanges<PhoneWaveDictionaryChangeAggregator>(key, out var ch))
-        {
-            ch.AddRemove(key, value);
-        }
-        else
-        {
-            var newChange = new PhoneWaveDictionaryChangeAggregator(target);
-            newChange.AddRemove(key, value);
-            context.AddChange(key, newChange);
-        }
-    }
+        TKey key, TValue value) => GetAggregator(context, target)?.AddRemove(key, value);
+
     static void UpdateDictionary(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target,
-        TKey key, TValue oldValue, TValue newValue)
-    {
-        if (context.TryGetChanges<PhoneWaveDictionaryChangeAggregator>(key, out var ch))
-        {
-            ch.AddChange(key, oldValue, newValue);
-        }
-        else
-        {
-            var newChange = new PhoneWaveDictionaryChangeAggregator(target);
-            newChange.AddChange(key, oldValue, newValue);
-            context.AddChange(key, newChange);
-        }
-    }
+        TKey key, TValue oldValue, TValue newValue) => GetAggregator(context, target)?.AddChange(key, oldValue, newValue);
 
     /// <summary>
     /// This is only supposed to be used from Rollback/RollForward.
@@ -208,9 +197,12 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
 
     public bool Remove(KeyValuePair<TKey, TValue> item)
     {
+        // The inner dictionary removes by KEY only, so the value that actually left the dictionary
+        // is recorded (not item.Value): an undo must restore what was there.
+        _dictionary.TryGetValue(item.Key, out var old);
         if (((ICollection<KeyValuePair<TKey, TValue>>)_dictionary).Remove(item))
         {
-            RemoveFromDictionary(Context, this, item.Key, item.Value);
+            RemoveFromDictionary(Context, this, item.Key, old!);
             return true;
         }
         return false;
