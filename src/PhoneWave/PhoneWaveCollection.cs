@@ -33,6 +33,18 @@ public class PhoneWaveCollection<T> : ObservableCollection<T>
 
         private const string ReplayFailureMessage = "Tracked collection replay applied every change; some collection observers failed.";
 
+        // Merge: the later inserts/removes were recorded against the collection as this list leaves
+        // it, so appending them keeps one chronological sequence — a forward replay walks it in order,
+        // an undo in reverse. Only this collection's own changes move its items, so the combined
+        // sequence replays correctly at this change's position.
+        protected internal override bool TryAbsorb(TransactionChange later)
+        {
+            if (later is not PhoneWaveCollectionChangeAggregator next || !ReferenceEquals(next._target, _target))
+                return false;
+            _changes.AddRange(next._changes);
+            return true;
+        }
+
         private void Apply((bool isRemove, int index, T item) change)
         {
             if (!change.isRemove) _target.InsertItemNoTransaction(change.index, change.item);

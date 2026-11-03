@@ -21,6 +21,7 @@ public class PhoneWaveContext : INotifyPropertyChanged
     {
         IsSuspended = true;
         CurrentIndex = -1;
+        _mergeCandidate = null;
         _recorded.Clear();
         ActiveTransaction = null;
     }
@@ -86,14 +87,44 @@ public class PhoneWaveContext : INotifyPropertyChanged
         return ActiveTransaction;
     }
 
+    // The ONLY record a CommitMerging may merge into: the newest record, set when it was recorded or
+    // merged, and cleared by every undo, redo and Suspend. So a merge never reaches past another commit
+    // (it replaces the candidate), an undo or a redo. An aborted transaction changes neither the state
+    // nor the history, so it leaves the candidate in place.
+    private PhoneWaveRecordedTransaction? _mergeCandidate;
+
     internal void AddRecord(PhoneWaveRecordedTransaction record)
     {
-        // Overwrite entries 
+        // Overwrite entries
         while (CurrentIndex < _recorded.Count - 1)
             _recorded.RemoveAt(_recorded.Count - 1);
         _recorded.Add(record);
-        
+        _mergeCandidate = record;
+
         CurrentIndex = _recorded.Count - 1;
+    }
+
+    /// <summary>
+    /// The record a transaction committed with <paramref name="mergeKey"/> merges into, or null to record
+    /// it as a new entry: the merge candidate, when it is still the current AND newest record and its
+    /// merge key equals <paramref name="mergeKey"/>. A null key never merges.
+    /// </summary>
+    internal PhoneWaveRecordedTransaction? FindMergeTarget(object? mergeKey)
+    {
+        if (mergeKey is null || _mergeCandidate is not { } candidate)
+            return null;
+        if (CurrentIndex != _recorded.Count - 1 || !ReferenceEquals(CurrentItem, candidate))
+            return null;
+        return Equals(mergeKey, candidate.MergeKey) ? candidate : null;
+    }
+
+    /// <summary>Puts the merged record in place of the current (newest) record it was merged from.</summary>
+    internal void ReplaceCurrentRecord(PhoneWaveRecordedTransaction merged)
+    {
+        _mergeCandidate = merged;
+        _recorded[CurrentIndex] = merged;
+        // The position stays; the entry at it is a new object.
+        OnPropertyChanged(nameof(CurrentItem));
     }
 
     public bool CanRollback => CurrentIndex >= 0;
@@ -209,6 +240,8 @@ public class PhoneWaveContext : INotifyPropertyChanged
     /// <param name="forward">True to replay forward (redo), false to replay backward (undo).</param>
     private void ReplayRecord(PhoneWaveRecordedTransaction record, bool forward)
     {
+        // An undo or a redo ends every merge run: a later CommitMerging records a new entry.
+        _mergeCandidate = null;
         // Entry failure (a throwing rising-edge observer) propagates from here before any change
         // applied and before the position moved: bytes and history are both untouched.
         BeginRoll();

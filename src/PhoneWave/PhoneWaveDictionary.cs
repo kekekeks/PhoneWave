@@ -66,6 +66,26 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
 
         private const string ReplayFailureMessage = "Tracked dictionary replay applied every change; some collection observers failed.";
 
+        // Merge: a key state is absolute (present with a value, or absent) on each side, so a key both
+        // transactions touched keeps THIS old side and takes the LATER new side; a key only the later
+        // transaction touched is taken over as it is. Keys are independent, so the order is free.
+        protected internal override bool TryAbsorb(TransactionChange later)
+        {
+            if (later is not PhoneWaveDictionaryChangeAggregator next || !ReferenceEquals(next._target, _target))
+                return false;
+            foreach (var pair in next._states)
+            {
+                if (_states.TryGetValue(pair.Key, out var state))
+                {
+                    state.HasNewValue = pair.Value.HasNewValue;
+                    state.NewValue = pair.Value.NewValue;
+                }
+                else
+                    _states[pair.Key] = pair.Value;
+            }
+            return true;
+        }
+
         // Each side of a key state is "present with this value" or "absent" — tracked by the
         // HasOldValue/HasNewValue flags, never by a sentinel value (default/null is a legal value).
         // A replay drives the key to the recorded side exactly: present → set, absent → remove.
