@@ -12,7 +12,7 @@ namespace PhoneWave.Generator.Tests
     /// the same merge key as the newest undo entry, with nothing in between, joins that entry, so one
     /// undo restores the state from before the FIRST transaction and one redo the state after the LAST.
     /// </summary>
-    public class PhoneWaveTransactionMergeTests
+    public partial class PhoneWaveTransactionMergeTests
     {
         /// <summary>A hand-written tracked model, shaped exactly as the generator emits it.</summary>
         private sealed class Node : PhoneWaveBase
@@ -653,7 +653,12 @@ namespace PhoneWave.Generator.Tests
             var history = new List<NotifyCollectionChangedEventArgs>();
             ((INotifyCollectionChanged)context.RecordedTransactions).CollectionChanged += (_, e) => history.Add(e);
             var properties = new List<string?>();
-            context.PropertyChanged += (_, e) => properties.Add(e.PropertyName);
+            // HasActiveTransaction rises and falls around every transaction; this test is about the history.
+            context.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName != nameof(PhoneWaveContext.HasActiveTransaction))
+                    properties.Add(e.PropertyName);
+            };
 
             CommitMerging(context, "run", () => node.Value = 2);
 

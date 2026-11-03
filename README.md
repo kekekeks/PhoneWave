@@ -54,7 +54,7 @@ of these are true:
 - `mergeKey` is not null, and it is equal (`object.Equals`) to the `MergeKey` of the previous entry.
 - The previous entry is the current AND the newest entry of the history.
 - Nothing happened to the history after that entry was recorded or merged: no other commit, no undo, no
-  redo, no `Suspend`. (An undo followed by a redo also stops the merge.)
+  redo, no `Suspend`, no `EndMerge()`. (An undo followed by a redo also stops the merge.)
 
 Otherwise the transaction is recorded as a new entry that carries `mergeKey`. A later call with the same
 key can then merge into it. A plain `Commit()` records an entry with no key, so nothing merges into it.
@@ -97,6 +97,59 @@ Rules:
 - **Redo side.** A merge happens only when there is no redo side (the previous entry must be the newest
   one). A new entry drops the redo side, as every commit does.
 - **Threads.** Same as `Commit()`: PhoneWave does no thread checks. Use one context from one thread.
+
+### Ambient merge key
+
+Use `UseMergeKey` when code that you cannot change calls a plain `Commit()`, and its transactions must
+join your merge chain (for example, an operation that a script calls):
+
+```cs
+using (myModel.Context.UseMergeKey(scriptRunId, (previousTag, thisTag) => "AI Changes"))
+{
+    RunOperationThatCommits();   // its tran.Commit() merges as CommitMerging(scriptRunId, mergeTags)
+}
+```
+
+- While the scope is open, `Commit()` behaves as `CommitMerging(AmbientMergeKey, mergeTags)`. So a
+  transaction with no changes records nothing. A collection edit outside a transaction (it commits its own
+  transaction) merges too.
+- When such a commit records a NEW entry, the entry's tag is `mergeTags(null, thisTag)` when you gave
+  `mergeTags`. So an entry that the operation starts carries your tag, not the operation's own tag. Without
+  `mergeTags`, the entry keeps the transaction's tag. If `mergeTags` throws, the transaction stays active
+  and uncommitted.
+- An explicit `CommitMerging(...)` call inside the scope uses its own arguments, not the scope's.
+- The key applies when a transaction commits, not when it begins.
+- Scopes do not nest: `UseMergeKey` throws while a scope is open. Dispose the scope to end it. A second
+  `Dispose()` is harmless. The key must not be null.
+- `AmbientMergeKey` is the key of the open scope, or null. Outside a scope, `Commit()` does not change.
+- Do not keep a scope open while other code (for example, a user edit) can commit: that commit merges too.
+
+### Control of the merge chain
+
+- `EndMerge()` ends the open merge chain, whatever its key. The next commit with a key records a new
+  entry. The history does not change.
+- `CanMerge(mergeKey)` is true when a commit with this key would merge now. It has no side effect.
+- `TryRetagMerge(mergeKey, newTag)` changes the tag of the newest entry when `CanMerge(mergeKey)` is true,
+  and returns true. Like a merge, it puts a new entry object in place of the entry (a `Replace`
+  notification and `PropertyChanged` for `CurrentItem`) and retires the previous object. The replay, the
+  chain and `CurrentIndex` do not change. Otherwise it does nothing and returns false.
+- `PhoneWaveRecordedTransaction.CommitCount` is the number of commits in an entry: 1 when it was never
+  merged. A merged commit whose changes were all combined into earlier changes counts too.
+
+### Open transaction
+
+`HasActiveTransaction` is true from `BeginTransaction` until the transaction is committed, rolled back or
+disposed. The context raises `PropertyChanged` when the value changes:
+
+- On a commit, after the history notifications.
+- On a roll-back of an uncommitted transaction, after the replay completed (after the falling edge of
+  `IsRolling`). So an observer sees the final state and can begin a new transaction at once.
+- On `Suspend()`, when a transaction was open.
+- Undo and redo do not change it.
+
+Each observer runs in isolation: one that throws does not stop the others, and the failure surfaces after
+the context is consistent. If an observer throws when `BeginTransaction` raises the value, the transaction
+is released (the caller never receives it) and `BeginTransaction` throws.
 
 Also check out dictionary and collection tracking classes, you might find these useful too.
 You will need read-only properties for these, constructed under the parent object's `PhoneWaveContext`.

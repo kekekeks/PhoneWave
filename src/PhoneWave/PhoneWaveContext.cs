@@ -23,7 +23,9 @@ public class PhoneWaveContext : INotifyPropertyChanged
         CurrentIndex = -1;
         _mergeCandidate = null;
         _recorded.Clear();
-        ActiveTransaction = null;
+        List<Exception>? failures = null;
+        EndActiveTransaction(ref failures);
+        ReplayFailures.Combine(failures, "HasActiveTransaction observers failed.")?.Throw();
     }
     public void Resume()
     {
@@ -74,7 +76,21 @@ public class PhoneWaveContext : INotifyPropertyChanged
     }
     public PhoneWaveRecordedTransaction? CurrentItem => (CurrentIndex >= 0 && CurrentIndex < _recorded.Count) ? _recorded[CurrentIndex] : null;
 
-    internal PhoneWaveTransaction? ActiveTransaction { get; set; }
+    internal PhoneWaveTransaction? ActiveTransaction { get; private set; }
+
+    /// <summary>
+    /// True while a transaction is open: from <see cref="BeginTransaction"/> until the transaction is
+    /// committed, rolled back or disposed. Raises <see cref="PropertyChanged"/> when it changes, so a
+    /// caller can wait for an open edit to end before it writes.
+    /// </summary>
+    public bool HasActiveTransaction => ActiveTransaction is not null;
+
+    // The HasActiveTransaction value the observers were last told. The notification is raised only when
+    // the value differs from it, so an observer that opens or ends a transaction from inside the
+    // notification gets a consistent sequence, and a deferred announcement (the abort path) never
+    // repeats a value that was already announced.
+    private bool _announcedActiveTransaction;
+
     public PhoneWaveTransaction BeginTransaction(object? tag = null)
     {
         if (IsSuspended)
@@ -83,14 +99,105 @@ public class PhoneWaveContext : INotifyPropertyChanged
             throw new InvalidOperationException("Attempted to begin transaction while a replay (undo/redo/abort) is in progress");
         if (ActiveTransaction != null)
             throw new InvalidOperationException();
-        ActiveTransaction = new PhoneWaveTransaction(this, tag);
-        return ActiveTransaction;
+        var transaction = new PhoneWaveTransaction(this, tag);
+        ActiveTransaction = transaction;
+        List<Exception>? failures = null;
+        AnnounceActiveTransaction(ref failures);
+        if (failures is not null)
+        {
+            // The caller never receives the transaction, so it must not stay open: release the context
+            // (the transaction has no changes yet) and announce that, then surface the failures.
+            transaction.Abandon();
+            EndActiveTransaction(ref failures);
+            ReplayFailures.Combine(failures, "HasActiveTransaction observers failed.")?.Throw();
+        }
+        return transaction;
     }
 
-    // The ONLY record a CommitMerging may merge into: the newest record, set when it was recorded or
-    // merged, and cleared by every undo, redo and Suspend. So a merge never reaches past another commit
-    // (it replaces the candidate), an undo or a redo. An aborted transaction changes neither the state
-    // nor the history, so it leaves the candidate in place.
+    /// <summary>
+    /// Releases the context from its active transaction WITHOUT announcing it. Only the abort path uses
+    /// it: it announces the end after the replay completed (<see cref="AnnounceActiveTransaction"/>).
+    /// </summary>
+    internal void ClearActiveTransaction() => ActiveTransaction = null;
+
+    /// <summary>Releases the context from its active transaction and announces
+    /// <see cref="HasActiveTransaction"/>; each observer failure is appended to <paramref name="failures"/>.</summary>
+    internal void EndActiveTransaction(ref List<Exception>? failures)
+    {
+        ActiveTransaction = null;
+        AnnounceActiveTransaction(ref failures);
+    }
+
+    /// <summary>
+    /// Raises <see cref="HasActiveTransaction"/> to every observer in isolation when its value differs
+    /// from the value last announced; each observer failure is appended to <paramref name="failures"/>.
+    /// </summary>
+    internal void AnnounceActiveTransaction(ref List<Exception>? failures)
+    {
+        var hasActiveTransaction = HasActiveTransaction;
+        if (hasActiveTransaction == _announcedActiveTransaction)
+            return;
+        _announcedActiveTransaction = hasActiveTransaction;
+        RaiseIsolated(nameof(HasActiveTransaction), ref failures);
+    }
+
+    // The ambient merge scope (UseMergeKey): while it is open, a plain PhoneWaveTransaction.Commit()
+    // commits as CommitMerging(AmbientMergeKey, AmbientMergeTags). Scopes do not nest.
+    private object? _ambientMergeKey;
+
+    /// <summary>
+    /// The merge key that a plain <see cref="PhoneWaveTransaction.Commit"/> uses while a
+    /// <see cref="UseMergeKey"/> scope is open, or null when no scope is open.
+    /// </summary>
+    public object? AmbientMergeKey => _ambientMergeKey;
+
+    /// <summary>The tag function of the open <see cref="UseMergeKey"/> scope, or null.</summary>
+    internal Func<object?, object?, object?>? AmbientMergeTags { get; private set; }
+
+    /// <summary>
+    /// Opens an ambient merge scope until the returned object is disposed. While it is open, a plain
+    /// <see cref="PhoneWaveTransaction.Commit"/> behaves as
+    /// <see cref="PhoneWaveTransaction.CommitMerging"/> with <paramref name="mergeKey"/> and
+    /// <paramref name="mergeTags"/>. When such a commit records a NEW entry, the entry's tag is
+    /// <c>mergeTags(null, transaction tag)</c> when <paramref name="mergeTags"/> is set. An explicit
+    /// <see cref="PhoneWaveTransaction.CommitMerging"/> call keeps its own arguments.
+    /// </summary>
+    /// <remarks>The key applies when a transaction commits, not when it begins. Scopes do not nest: a
+    /// second call while a scope is open throws. Disposing the scope twice is harmless.</remarks>
+    /// <param name="mergeKey">The merge key of the scope; not null.</param>
+    /// <param name="mergeTags">Optional: computes an entry's tag from (previous tag, this tag); for a new
+    /// entry the previous tag is null.</param>
+    /// <returns>The scope; dispose it to end the scope.</returns>
+    public IDisposable UseMergeKey(object mergeKey, Func<object?, object?, object?>? mergeTags = null)
+    {
+        if (mergeKey is null)
+            throw new ArgumentNullException(nameof(mergeKey));
+        if (_ambientMergeKey is not null)
+            throw new InvalidOperationException("Attempted to open a merge key scope while one is open");
+        _ambientMergeKey = mergeKey;
+        AmbientMergeTags = mergeTags;
+        return new MergeKeyScope(this);
+    }
+
+    private sealed class MergeKeyScope(PhoneWaveContext context) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            // Scopes do not nest, so the open scope is this one.
+            context._ambientMergeKey = null;
+            context.AmbientMergeTags = null;
+        }
+    }
+
+    // The ONLY record a CommitMerging may merge into: the newest record, set when it was recorded,
+    // merged or retagged, and cleared by every undo, redo, Suspend and EndMerge. So a merge never reaches
+    // past another commit (it replaces the candidate), an undo or a redo. An aborted transaction changes
+    // neither the state nor the history, so it leaves the candidate in place.
     private PhoneWaveRecordedTransaction? _mergeCandidate;
 
     internal void AddRecord(PhoneWaveRecordedTransaction record)
@@ -125,6 +232,37 @@ public class PhoneWaveContext : INotifyPropertyChanged
         _recorded[CurrentIndex] = merged;
         // The position stays; the entry at it is a new object.
         OnPropertyChanged(nameof(CurrentItem));
+    }
+
+    /// <summary>
+    /// Ends the open merge chain, whatever its key: the next commit with a merge key records a new entry.
+    /// The history and the ambient merge scope do not change.
+    /// </summary>
+    public void EndMerge() => _mergeCandidate = null;
+
+    /// <summary>
+    /// True when a commit with <paramref name="mergeKey"/> would merge into the newest entry now. It has no
+    /// side effect. (A commit with no changes still records nothing.)
+    /// </summary>
+    /// <param name="mergeKey">The merge key to test.</param>
+    public bool CanMerge(object mergeKey) => FindMergeTarget(mergeKey) is not null;
+
+    /// <summary>
+    /// When the newest entry is the open merge chain of <paramref name="mergeKey"/> (<see cref="CanMerge"/>
+    /// is true), replaces that entry's tag with <paramref name="tag"/> and returns true. The entry is
+    /// replaced by a new entry object, as a merge does: a Replace notification of
+    /// <see cref="RecordedTransactions"/> and <see cref="PropertyChanged"/> for <see cref="CurrentItem"/>.
+    /// The replay, the chain and <see cref="CurrentIndex"/> do not change. Otherwise it does nothing and
+    /// returns false.
+    /// </summary>
+    /// <param name="mergeKey">The merge key of the chain.</param>
+    /// <param name="tag">The new tag of the entry.</param>
+    public bool TryRetagMerge(object mergeKey, object? tag)
+    {
+        if (FindMergeTarget(mergeKey) is not { } current)
+            return false;
+        ReplaceCurrentRecord(current.Retag(tag));
+        return true;
     }
 
     public bool CanRollback => CurrentIndex >= 0;

@@ -56,10 +56,23 @@ public class PhoneWaveTransaction : IDisposable
         _changes[key] = firstChange; 
     }
 
+    /// <summary>
+    /// Commits this transaction as a new undo entry with no merge key. Inside a
+    /// <see cref="PhoneWaveContext.UseMergeKey"/> scope it commits as <see cref="CommitMerging"/> with the
+    /// scope's key and tag function instead (so a transaction with no changes then records nothing), and
+    /// a new entry takes the tag <c>mergeTags(null, this tag)</c> when the scope has a tag function.
+    /// </summary>
     public void Commit()
     {
         if(_disposed)
             return;
+        // The ambient scope lets code that only calls Commit() (for example an operation that a script
+        // runs) join the caller's merge chain without a change.
+        if (_context.AmbientMergeKey is { } ambientMergeKey)
+        {
+            CommitMerging(ambientMergeKey, _context.AmbientMergeTags, tagNewEntry: true);
+            return;
+        }
         Complete(() => _context.AddRecord(new PhoneWaveRecordedTransaction(_changes, _tag, mergeKey: null)));
     }
 
@@ -92,6 +105,13 @@ public class PhoneWaveTransaction : IDisposable
     /// Null keeps the previous entry's tag.</param>
     /// <returns>What happened to the transaction.</returns>
     public PhoneWaveCommitOutcome CommitMerging(object? mergeKey, Func<object?, object?, object?>? mergeTags = null)
+        => CommitMerging(mergeKey, mergeTags, tagNewEntry: false);
+
+    /// <param name="mergeKey">See the public overload.</param>
+    /// <param name="mergeTags">See the public overload.</param>
+    /// <param name="tagNewEntry">True for a commit under an ambient merge scope: a new entry takes the tag
+    /// <c>mergeTags(null, this tag)</c>, so an entry that such a commit starts carries the scope's tag.</param>
+    private PhoneWaveCommitOutcome CommitMerging(object? mergeKey, Func<object?, object?, object?>? mergeTags, bool tagNewEntry)
     {
         if (_disposed)
             return PhoneWaveCommitOutcome.NothingRecorded;
@@ -103,7 +123,9 @@ public class PhoneWaveTransaction : IDisposable
 
         if (_context.FindMergeTarget(mergeKey) is not { } previous)
         {
-            Complete(() => _context.AddRecord(new PhoneWaveRecordedTransaction(_changes, _tag, mergeKey)));
+            // The tag delegate runs before anything is committed, as for a merge.
+            var newTag = tagNewEntry && mergeTags is not null ? mergeTags(null, _tag) : _tag;
+            Complete(() => _context.AddRecord(new PhoneWaveRecordedTransaction(_changes, newTag, mergeKey)));
             return PhoneWaveCommitOutcome.Recorded;
         }
 
@@ -124,15 +146,24 @@ public class PhoneWaveTransaction : IDisposable
     private void Complete(Action publish)
     {
         _disposed = true;
+        // Chronological failures: the history publication first, then the HasActiveTransaction observers.
+        // A single failure keeps its original instance.
+        List<Exception>? failures = null;
         try
         {
             publish();
         }
-        finally
+        catch (Exception publishFailure)
         {
-            _context.ActiveTransaction = null;
+            (failures ??= []).Add(publishFailure);
         }
+        _context.EndActiveTransaction(ref failures);
+        ReplayFailures.Combine(failures, "Committing the transaction failed at multiple stages.")?.Throw();
     }
+
+    /// <summary>Marks a transaction that its caller never received as done, so it can never commit or
+    /// roll back (see <see cref="PhoneWaveContext.BeginTransaction"/>). It has no changes.</summary>
+    internal void Abandon() => _disposed = true;
 
     public void Rollback()
     {
@@ -191,8 +222,9 @@ public class PhoneWaveTransaction : IDisposable
         }
         finally
         {
-            // The guard clears BEFORE the completion notification (the roll's Dispose below).
-            context.ActiveTransaction = null;
+            // The guard clears BEFORE the completion notification (the roll's Dispose below). The end of
+            // the transaction (HasActiveTransaction) is announced only after that completion, below.
+            context.ClearActiveTransaction();
 
             if (roll is not null)
             {
@@ -216,7 +248,21 @@ public class PhoneWaveTransaction : IDisposable
             }
         }
 
-        // Restored and completed: surface the original failure with its original stack.
+        // Restored and completed: announce the free context last, so an observer that waits for the end
+        // of the transaction sees the final state and may begin a new transaction at once. An observer
+        // failure aggregates with the replay failure; it never masks it.
+        List<Exception>? announceFailures = null;
+        context.AnnounceActiveTransaction(ref announceFailures);
+        if (announceFailures is not null)
+        {
+            primary = primary is null
+                ? ReplayFailures.Combine(announceFailures, "HasActiveTransaction observers failed.")
+                : ExceptionDispatchInfo.Capture(new AggregateException(
+                    "Abort replay failed and the HasActiveTransaction observers also failed.",
+                    [primary.SourceException, .. announceFailures]));
+        }
+
+        // Surface the original failure with its original stack.
         primary?.Throw();
     }
 }
@@ -235,17 +281,23 @@ public class PhoneWaveRecordedTransaction
     // only by a record that carries a merge key: no other record can ever be merged into.
     private readonly Dictionary<object, (int Segment, int Index)>? _latest;
 
-    // Set when this record was merged into a newer record: that record took over (and may have changed)
-    // these change objects, so this one must never replay again.
+    // Set when this record was merged into a newer record or retagged: that record took over (and may
+    // have changed) these change objects, so this one must never replay again.
     private bool _retired;
 
     public object? Tag { get; }
 
     /// <summary>
-    /// The key given to <see cref="PhoneWaveTransaction.CommitMerging"/> when this entry was recorded, or
-    /// null (never merges).
+    /// The key given to <see cref="PhoneWaveTransaction.CommitMerging"/> (or the ambient key of a
+    /// <see cref="PhoneWaveContext.UseMergeKey"/> scope) when this entry was recorded, or null (never merges).
     /// </summary>
     public object? MergeKey { get; }
+
+    /// <summary>
+    /// How many committed transactions this entry holds: 1 when it was never merged, plus one per merge.
+    /// (A merged transaction whose changes were all absorbed still counts.)
+    /// </summary>
+    public int CommitCount { get; }
 
     internal PhoneWaveRecordedTransaction(Dictionary<object, TransactionChange> changes, object? tag, object? mergeKey)
     {
@@ -261,15 +313,30 @@ public class PhoneWaveRecordedTransaction
         _latest = latest;
         Tag = tag;
         MergeKey = mergeKey;
+        CommitCount = 1;
     }
 
     private PhoneWaveRecordedTransaction(List<List<TransactionChange>> segments,
-        Dictionary<object, (int Segment, int Index)> latest, object? tag, object? mergeKey)
+        Dictionary<object, (int Segment, int Index)> latest, object? tag, object? mergeKey, int commitCount)
     {
         _segments = segments;
         _latest = latest;
         Tag = tag;
         MergeKey = mergeKey;
+        CommitCount = commitCount;
+    }
+
+    /// <summary>
+    /// Returns a new record with the same changes, chain state and commit count, and
+    /// <paramref name="tag"/>; this record is retired, as on a merge (the new record takes over its changes).
+    /// </summary>
+    /// <param name="tag">The new record's tag.</param>
+    internal PhoneWaveRecordedTransaction Retag(object? tag)
+    {
+        // Only the open chain's record is retagged, and only a record with a merge key opens a chain.
+        var latest = _latest ?? throw new InvalidOperationException("Attempted to retag a record without a merge key");
+        _retired = true;
+        return new PhoneWaveRecordedTransaction(_segments, latest, tag, MergeKey, CommitCount);
     }
 
     /// <summary>
@@ -298,7 +365,7 @@ public class PhoneWaveRecordedTransaction
         if (segment.Count > 0)
             _segments.Add(segment);
         _retired = true;
-        return new PhoneWaveRecordedTransaction(_segments, latest, tag, MergeKey);
+        return new PhoneWaveRecordedTransaction(_segments, latest, tag, MergeKey, CommitCount + 1);
     }
 
     private static bool TryAbsorb(TransactionChange earlier, TransactionChange later, ref List<Exception>? failures)
