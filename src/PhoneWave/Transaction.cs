@@ -299,8 +299,15 @@ public class PhoneWaveRecordedTransaction
     /// </summary>
     public int CommitCount { get; }
 
+    /// <summary>
+    /// When the newest transaction of this entry was committed (UTC): the time it was recorded, or of its latest
+    /// merge. A retag keeps it.
+    /// </summary>
+    public DateTime RecordedAt { get; }
+
     internal PhoneWaveRecordedTransaction(Dictionary<object, TransactionChange> changes, object? tag, object? mergeKey)
     {
+        RecordedAt = DateTime.UtcNow;
         var segment = new List<TransactionChange>(changes.Count);
         Dictionary<object, (int Segment, int Index)>? latest = mergeKey is null ? null : new(changes.Count);
         foreach (var pair in changes)
@@ -317,8 +324,9 @@ public class PhoneWaveRecordedTransaction
     }
 
     private PhoneWaveRecordedTransaction(List<List<TransactionChange>> segments,
-        Dictionary<object, (int Segment, int Index)> latest, object? tag, object? mergeKey, int commitCount)
+        Dictionary<object, (int Segment, int Index)> latest, object? tag, object? mergeKey, int commitCount, DateTime recordedAt)
     {
+        RecordedAt = recordedAt;
         _segments = segments;
         _latest = latest;
         Tag = tag;
@@ -336,7 +344,7 @@ public class PhoneWaveRecordedTransaction
         // Only the open chain's record is retagged, and only a record with a merge key opens a chain.
         var latest = _latest ?? throw new InvalidOperationException("Attempted to retag a record without a merge key");
         _retired = true;
-        return new PhoneWaveRecordedTransaction(_segments, latest, tag, MergeKey, CommitCount);
+        return new PhoneWaveRecordedTransaction(_segments, latest, tag, MergeKey, CommitCount, RecordedAt);
     }
 
     /// <summary>
@@ -365,7 +373,7 @@ public class PhoneWaveRecordedTransaction
         if (segment.Count > 0)
             _segments.Add(segment);
         _retired = true;
-        return new PhoneWaveRecordedTransaction(_segments, latest, tag, MergeKey, CommitCount + 1);
+        return new PhoneWaveRecordedTransaction(_segments, latest, tag, MergeKey, CommitCount + 1, DateTime.UtcNow);
     }
 
     private static bool TryAbsorb(TransactionChange earlier, TransactionChange later, ref List<Exception>? failures)
