@@ -111,8 +111,7 @@ using (myModel.Context.UseMergeKey(scriptRunId, (previousTag, thisTag) => "AI Ch
 ```
 
 - While the scope is open, `Commit()` behaves as `CommitMerging(AmbientMergeKey, mergeTags)`. So a
-  transaction with no changes records nothing. A collection edit outside a transaction (it commits its own
-  transaction) merges too.
+  transaction with no changes records nothing.
 - When such a commit records a NEW entry, the entry's tag is `mergeTags(null, thisTag)` when you gave
   `mergeTags`. So an entry that the operation starts carries your tag, not the operation's own tag. Without
   `mergeTags`, the entry keeps the transaction's tag. If `mergeTags` throws, the transaction stays active
@@ -153,5 +152,18 @@ is released (the caller never receives it) and `BeginTransaction` throws.
 
 Also check out dictionary and collection tracking classes, you might find these useful too.
 You will need read-only properties for these, constructed under the parent object's `PhoneWaveContext`.
+Their changes follow the same rule as property changes: they need an active transaction. Collections and
+dictionaries have the same rule:
+
+- A change of a `PhoneWaveCollection` (add, insert, remove, move, replace, clear) or of a
+  `PhoneWaveDictionary` (add, set by key, remove, clear) with no active transaction throws
+  `InvalidOperationException` before the container changes. Neither container opens a transaction of its own.
+- A change during an undo, a redo or an abort (for example, from a change notification observer) throws
+  `InvalidOperationException` before the container changes.
+- While the context is suspended, the change applies and nothing is recorded.
+- Inside a transaction, the change is recorded in that transaction before it applies. If the record fails,
+  the container does not change.
+- A call that changes nothing never throws and records nothing: a clear of an empty container, and a
+  remove of an item or key that is not there.
 
 GLHF.

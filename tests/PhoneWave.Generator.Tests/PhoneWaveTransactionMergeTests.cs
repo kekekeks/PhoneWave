@@ -338,13 +338,13 @@ namespace PhoneWave.Generator.Tests
         }
 
         [Fact]
-        public void AnAutoCommittedCollectionEditInBetween_PreventsTheMerge()
+        public void ACollectionOnlyCommitInBetween_PreventsTheMerge()
         {
             var context = NewContext();
             var node = new Node(context);
 
             CommitMerging(context, "run", () => node.Value = 1);
-            node.Children.Add(new Node(context));
+            Commit(context, () => node.Children.Add(new Node(context)));
             Assert.Equal(PhoneWaveCommitOutcome.Recorded, CommitMerging(context, "run", () => node.Value = 2));
 
             Assert.Equal(3, context.RecordedTransactions.Count);

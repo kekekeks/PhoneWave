@@ -62,7 +62,7 @@ namespace PhoneWave.Generator.Tests
         }
 
         [Fact]
-        public void AmbientScope_AnAutoCommittedCollectionEdit_Merges()
+        public void AmbientScope_ACollectionOnlyCommit_Merges()
         {
             var context = NewContext();
             var root = new Node(context);
@@ -72,8 +72,8 @@ namespace PhoneWave.Generator.Tests
             using (context.UseMergeKey("run"))
             {
                 Commit(context, () => root.Value = 1);
-                // A collection edit outside a transaction commits its own transaction with Commit().
-                root.Children.Add(child);
+                // A transaction that changes only a collection merges under the scope like any other.
+                Commit(context, () => root.Children.Add(child));
             }
 
             Assert.Equal(2, context.RecordedTransactions.Count);
@@ -438,7 +438,7 @@ namespace PhoneWave.Generator.Tests
         }
 
         [Fact]
-        public void HasActiveTransaction_DoesNotChangeOnUndoOrRedo_OrOnAnAutoCommitPair()
+        public void HasActiveTransaction_DoesNotChangeOnUndoOrRedo_OrOnARejectedCollectionEdit()
         {
             var context = NewContext();
             var node = new Node(context);
@@ -449,8 +449,11 @@ namespace PhoneWave.Generator.Tests
             context.RollForward();
             Assert.Empty(values);
 
-            // A collection edit outside a transaction opens and commits its own one.
-            node.Children.Add(new Node(context));
+            // A collection edit outside a transaction is refused; it never opens a transaction of its own.
+            Assert.Throws<InvalidOperationException>(() => node.Children.Add(new Node(context)));
+            Assert.Empty(values);
+
+            Commit(context, () => node.Children.Add(new Node(context)));
             Assert.Equal(new[] { true, false }, values);
         }
 

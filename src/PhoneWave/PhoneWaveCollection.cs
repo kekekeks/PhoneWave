@@ -59,20 +59,14 @@ public class PhoneWaveCollection<T> : ObservableCollection<T>
     }
     static void UpdateCollection(PhoneWaveContext context, PhoneWaveCollection<T> target, bool isRemoval, int index, T item)
     {
-        if (context.IsSuspended) return;
-        // A replay (undo/redo/abort) applies recorded changes through the NoTransaction paths only,
-        // so an edit that reaches here while one runs comes from a notification observer. It used
-        // to be applied silently and never recorded — a permanent change no undo could reach. It
-        // now fails loudly BEFORE the collection changes, exactly as a tracked property write
-        // during a replay does (no active transaction on undo/redo; an aborting one on abort).
-        if (context.IsRolling)
-            throw new InvalidOperationException("Attempted to modify a tracked collection while a replay (undo/redo/abort) is in progress");
-
-        // Auto-create transaction if none active (for standalone collection ops)
-        bool autoTx = context.ActiveTransaction == null;
-        PhoneWaveTransaction? tx = null;
-        if (autoTx)
-            tx = context.BeginTransaction(null);
+        // The shared container gate (the dictionary uses the same one): suspended → apply untracked;
+        // a replay (undo/redo/abort) in progress or no active transaction → throw. A change outside a
+        // transaction used to open and commit an untagged transaction of its own (one undo entry per
+        // item for Clear, two for Move, recorded before the collection changed); a change during a
+        // replay used to apply silently and unrecorded. Both now fail BEFORE the collection changes:
+        // every entry point (Insert, Remove, Move, Set, Clear) reaches here before its base call, and
+        // a Move/Set/Clear fails on its first call.
+        if (!context.EnsureCanModify("collection")) return;
 
         void MakeChange(PhoneWaveCollectionChangeAggregator x)
         {
@@ -88,9 +82,6 @@ public class PhoneWaveCollection<T> : ObservableCollection<T>
             MakeChange(da);
             context.AddChange(target, da);
         }
-        
-        if (autoTx)
-            tx?.Commit();
     }
 
     public PhoneWaveContext Context { get; }

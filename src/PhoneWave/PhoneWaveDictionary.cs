@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections;
 using System.Linq;
@@ -111,25 +112,25 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
     // (e.g. one user field set on several maps) landed in the FIRST dictionary's aggregator: the
     // second dictionary's change was never undone, and a key equal to another change's key could
     // even fetch an aggregator of the wrong type.
-    static PhoneWaveDictionaryChangeAggregator? GetAggregator(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target)
+    //
+    // Every mutator follows one order: argument checks first, then this gate, then the record, then the
+    // change. The gate is the context's shared container gate (the collection uses the same one): it
+    // returns null while suspended (the change applies and nothing is recorded) and throws during a
+    // replay (undo/redo/abort) or with no active transaction. The mutators used to change the inner
+    // dictionary FIRST and record afterwards, so a refused record left a half-applied, unrecorded change.
+    // Now a refused or failed record leaves the dictionary as it was. A call that changes nothing
+    // (removing a missing key, clearing an empty dictionary) skips the gate: it never throws and records
+    // nothing, as the collection's empty Clear does.
+    PhoneWaveDictionaryChangeAggregator? BeginRecord()
     {
-        if (context.TryGetChanges<PhoneWaveDictionaryChangeAggregator>(target, out var ch))
-            return ch;
-        if (context.IsSuspended)
+        if (!Context.EnsureCanModify("dictionary"))
             return null;
-        var newChange = new PhoneWaveDictionaryChangeAggregator(target);
-        context.AddChange(target, newChange);
+        if (Context.TryGetChanges<PhoneWaveDictionaryChangeAggregator>(this, out var ch))
+            return ch;
+        var newChange = new PhoneWaveDictionaryChangeAggregator(this);
+        Context.AddChange(this, newChange);
         return newChange;
     }
-
-    static void AddToDictionary(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target,
-        TKey key, TValue value) => GetAggregator(context, target)?.AddAdd(key, value);
-
-    static void RemoveFromDictionary(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target,
-        TKey key, TValue value) => GetAggregator(context, target)?.AddRemove(key, value);
-
-    static void UpdateDictionary(PhoneWaveContext context, PhoneWaveDictionary<TKey, TValue> target,
-        TKey key, TValue oldValue, TValue newValue) => GetAggregator(context, target)?.AddChange(key, oldValue, newValue);
 
     /// <summary>
     /// This is only supposed to be used from Rollback/RollForward.
@@ -162,17 +163,13 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
         get => _dictionary[key];
         set
         {
-            if (_dictionary.ContainsKey(key))
-            {
-                var oldValue = _dictionary[key];
-                _dictionary[key] = value;
-                UpdateDictionary(Context, this, key, oldValue, value);
-            }
+            var replace = _dictionary.TryGetValue(key, out var oldValue);
+            var record = BeginRecord();
+            if (replace)
+                record?.AddChange(key, oldValue!, value);
             else
-            {
-                _dictionary[key] = value;
-                AddToDictionary(Context, this, key, value);
-            }
+                record?.AddAdd(key, value);
+            _dictionary[key] = value;
         }
     }
 
@@ -186,25 +183,32 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
 
     public void Add(TKey key, TValue value)
     {
+        // The duplicate-key check runs before the record: a recorded add of a key that the inner Add
+        // then refused would make the undo remove the key that was already there.
+        if (_dictionary.ContainsKey(key))
+            throw new ArgumentException($"An item with the same key has already been added. Key: {key}", nameof(key));
+        BeginRecord()?.AddAdd(key, value);
         _dictionary.Add(key, value);
-        AddToDictionary(Context, this, key, value);
     }
 
     public void Add(KeyValuePair<TKey, TValue> item) => Add(item.Key, item.Value);
 
     public void Clear()
     {
-        var kvps = this.ToList();
+        var removed = _dictionary.ToArray();
+        if (removed.Length > 0 && BeginRecord() is { } record)
+            foreach (var item in removed)
+                record.AddRemove(item.Key, item.Value);
         _dictionary.Clear();
-        foreach (var item in kvps)
-            RemoveFromDictionary(Context, this, item.Key, item.Value);
     }
+
     public bool Remove(TKey key)
     {
-        _dictionary.TryGetValue(key, out var old);
-        var result = _dictionary.Remove(key);
-        if (result) RemoveFromDictionary(Context, this, key, old);
-        return result;
+        if (!_dictionary.TryGetValue(key, out var old))
+            return false;
+        BeginRecord()?.AddRemove(key, old);
+        _dictionary.Remove(key);
+        return true;
     }
 
     public bool Contains(KeyValuePair<TKey, TValue> item) => _dictionary.Contains(item);
@@ -215,18 +219,9 @@ public class PhoneWaveDictionary<TKey, TValue> : IDictionary<TKey, TValue>, INot
 
     public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator() => _dictionary.GetEnumerator();
 
-    public bool Remove(KeyValuePair<TKey, TValue> item)
-    {
-        // The inner dictionary removes by KEY only, so the value that actually left the dictionary
-        // is recorded (not item.Value): an undo must restore what was there.
-        _dictionary.TryGetValue(item.Key, out var old);
-        if (((ICollection<KeyValuePair<TKey, TValue>>)_dictionary).Remove(item))
-        {
-            RemoveFromDictionary(Context, this, item.Key, old!);
-            return true;
-        }
-        return false;
-    }
+    // The inner dictionary removes a pair by KEY only, so this removes by key too, and the value that
+    // actually left the dictionary is recorded (not item.Value): an undo must restore what was there.
+    public bool Remove(KeyValuePair<TKey, TValue> item) => Remove(item.Key);
 
     public bool TryGetValue(TKey key,
 #if NET6_0_OR_GREATER

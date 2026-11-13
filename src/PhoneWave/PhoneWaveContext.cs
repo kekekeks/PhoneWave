@@ -61,6 +61,32 @@ public class PhoneWaveContext : INotifyPropertyChanged
         ActiveTransaction.AddChange(key, change);
     }
 
+    /// <summary>
+    /// The ONE gate of every tracked container change (<see cref="PhoneWaveCollection{T}"/>,
+    /// <see cref="PhoneWaveDictionary{TKey,TValue}"/>). The container calls it BEFORE it changes anything:
+    /// while suspended it returns <see langword="false"/> (the change applies and nothing is recorded);
+    /// during a replay (undo/redo/abort) or with no active transaction it throws, so a refused change
+    /// never lands half-applied; otherwise it returns <see langword="true"/> and the container records the
+    /// change before it applies it. <paramref name="kind"/> names the container in the message
+    /// ("collection", "dictionary").
+    /// </summary>
+    internal bool EnsureCanModify(string kind)
+    {
+        if (IsSuspended)
+            return false;
+        // A replay (undo/redo/abort) applies recorded changes through the containers' NoTransaction
+        // paths only, so an edit that reaches here while one runs comes from a notification observer.
+        // It used to be applied silently and never recorded — a permanent change no undo could reach.
+        // It fails loudly instead, exactly as a tracked property write during a replay does (no active
+        // transaction on undo/redo; an aborting one on abort).
+        if (IsRolling)
+            throw new InvalidOperationException($"Attempted to modify a tracked {kind} while a replay (undo/redo/abort) is in progress");
+        // A change outside a transaction is a contract violation, exactly as a tracked property write is.
+        if (ActiveTransaction == null)
+            throw new InvalidOperationException($"Attempted to modify a tracked {kind} without an active transaction");
+        return true;
+    }
+
     public IReadOnlyList<PhoneWaveRecordedTransaction> RecordedTransactions => _recorded;
 
     public int CurrentIndex
